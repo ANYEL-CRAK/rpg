@@ -1,7 +1,7 @@
-const CACHE = 'godofredo-v24-pwa';
+const CACHE = 'index';
 const APP_SHELL = [
   "./",
-  "./Godofredo-v24-pwa.html",
+  "./index.html",
   "./icon-192.png",
   "./icon-512.png",
   "./image/advertencia.webp",
