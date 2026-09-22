@@ -88,24 +88,78 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+
   const request = event.request;
 
   event.respondWith((async () => {
-    const cached = await caches.match(request);
+    const cache = await caches.open(CACHE);
+
+    // Chrome puede solicitar los WAV mediante Range. Si el archivo completo
+    // está en caché, devolvemos correctamente el fragmento solicitado.
+    if (request.headers.has('range')) {
+      const cachedAudio = await cache.match(request.url);
+
+      if (cachedAudio) {
+        const rangeHeader = request.headers.get('range');
+        const match = rangeHeader && rangeHeader.match(/bytes=(\d+)-(\d*)/);
+
+        if (match) {
+          try {
+            const buffer = await cachedAudio.arrayBuffer();
+            const start = Number(match[1]);
+            let end = match[2] ? Number(match[2]) : buffer.byteLength - 1;
+
+            if (start >= 0 && start < buffer.byteLength) {
+              end = Math.min(end, buffer.byteLength - 1);
+
+              if (end >= start) {
+                const chunk = buffer.slice(start, end + 1);
+
+                return new Response(chunk, {
+                  status: 206,
+                  statusText: 'Partial Content',
+                  headers: {
+                    'Content-Type': cachedAudio.headers.get('Content-Type') || 'audio/wav',
+                    'Content-Range': `bytes ${start}-${end}/${buffer.byteLength}`,
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': String(chunk.byteLength)
+                  }
+                });
+              }
+            }
+          } catch (error) {
+            console.warn('[Godofredo] Error sirviendo audio Range:', error);
+          }
+        }
+      }
+    }
+
+    // Si ya está en caché, usarlo directamente.
+    const cached = await cache.match(request);
     if (cached) return cached;
 
+    // Si no está en caché, intentar Internet y guardar la respuesta.
     try {
       const response = await fetch(request);
-      if (response && response.ok && new URL(request.url).origin === self.location.origin) {
-        const cache = await caches.open(CACHE);
+
+      if (
+        response &&
+        response.ok &&
+        new URL(request.url).origin === self.location.origin
+      ) {
         await cache.put(request, response.clone());
       }
+
       return response;
     } catch (error) {
       if (request.mode === 'navigate') {
-        return caches.match(APP) || caches.match('./');
+        return (await cache.match(APP)) || (await cache.match('./'));
       }
-      return new Response('', { status: 503, statusText: 'Offline' });
+
+      return new Response('', {
+        status: 503,
+        statusText: 'Offline'
+      });
     }
   })());
 });
