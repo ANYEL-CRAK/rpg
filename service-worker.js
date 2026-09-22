@@ -1,79 +1,87 @@
-const CACHE = 'godofredo-v26-pwa';
-const APP = './Godofredo-v26-pwa.html';
-const CORE = [
-  './',
-  APP,
-  './manifest.json',
-  './service-worker.js',
-  './icon-192.png',
-  './icon-512.png'
+const CACHE = 'godofredo-v24-pwa';
+const APP_SHELL = [
+  "./",
+  "./Godofredo-v24-pwa.html",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./image/advertencia.webp",
+  "./image/ajuste.webp",
+  "./image/alas.webp",
+  "./image/arbol.webp",
+  "./image/balansa.webp",
+  "./image/basura.webp",
+  "./image/bola.webp",
+  "./image/bolsa.webp",
+  "./image/calavera.webp",
+  "./image/candado.webp",
+  "./image/cascada.webp",
+  "./image/castillo.webp",
+  "./image/cofre.webp",
+  "./image/confeti.webp",
+  "./image/corazon.webp",
+  "./image/corona.webp",
+  "./image/daga.webp",
+  "./image/destello.webp",
+  "./image/diana.webp",
+  "./image/dos_espada.webp",
+  "./image/elixir.webp",
+  "./image/escudo.webp",
+  "./image/espada.webp",
+  "./image/estandarte.webp",
+  "./image/estrella.webp",
+  "./image/fuego.webp",
+  "./image/gema.webp",
+  "./image/hp_grande.webp",
+  "./image/hp_pequena.webp",
+  "./image/huella.webp",
+  "./image/infinito.webp",
+  "./image/logrado.webp",
+  "./image/mana_local.webp",
+  "./image/marco.webp",
+  "./image/marco_cobre.webp",
+  "./image/marco_esmeralda.webp",
+  "./image/marco_oro.webp",
+  "./image/marco_plata.webp",
+  "./image/medalla.webp",
+  "./image/montana.webp",
+  "./image/mp_grande.webp",
+  "./image/mp_mediano.webp",
+  "./image/mp_pequeno.webp",
+  "./image/nueva_mision.webp",
+  "./image/oro_moneda.webp",
+  "./image/papel.webp",
+  "./image/planta.webp",
+  "./image/rayo.webp",
+  "./image/regalo.webp",
+  "./image/retono.webp",
+  "./image/sana.webp",
+  "./image/tienda.webp",
+  "./image/trofeo.webp",
+  "./image/volcan.webp",
+  "./manifest.json",
+  "./service-worker.js",
+  "./sounds/boton_epico.wav",
+  "./sounds/guerrero_espada.wav",
+  "./sounds/mago_magia.wav",
+  "./sounds/mision_completada.wav",
+  "./sounds/mision_fallida.wav",
+  "./sounds/mision_fallida_oscura_v2.wav",
+  "./sounds/paladin_escudo.wav",
+  "./sounds/paladin_escudo_impacto_epico.wav",
+  "./sounds/picaro_daga.wav",
+  "./sounds/sanador_curacion.wav",
+  "./sounds/subir_nivel_epico.wav",
+  "./sounds/tienda_monedas.wav"
 ];
-
-function isLocalAsset(value) {
-  if (!value) return false;
-  let v = value.trim().replace(/^['"]|['"]$/g, '');
-  if (!v || v.startsWith('data:') || v.startsWith('#') || v.startsWith('http://') || v.startsWith('https://') || v.startsWith('//')) return false;
-  if (v.startsWith('javascript:')) return false;
-  if (v.startsWith('/')) v = '.' + v;
-  return v.startsWith('./') || v.startsWith('../') || (!v.includes(':') && !v.startsWith('mailto:'));
-}
-
-function extractAssets(html) {
-  const found = new Set(CORE);
-  const patterns = [
-    /(?:src|href|poster|content)\s*=\s*["']([^"']+)["']/gi,
-    /url\(\s*["']?([^"')]+)["']?\s*\)/gi,
-    /(?:sounds|image)\/[A-Za-z0-9_().%+\-]+\.(?:webp|png|jpg|jpeg|gif|svg|wav|mp3|ogg|m4a)/gi
-  ];
-
-  for (const re of patterns) {
-    let match;
-    while ((match = re.exec(html)) !== null) {
-      const raw = match[1] || match[0];
-      if (!raw) continue;
-      const candidates = match[1] ? [raw] : [raw];
-      for (const candidate of candidates) {
-        let value = candidate.trim();
-        value = value.replace(/[?#].*$/, '');
-        if (!isLocalAsset(value)) continue;
-        if (!value.startsWith('./') && !value.startsWith('../')) value = './' + value;
-        found.add(value);
-      }
-    }
-  }
-  return [...found];
-}
-
-async function cacheOne(cache, url) {
-  try {
-    const request = new Request(url, { cache: 'reload' });
-    const response = await fetch(request);
-    if (response && response.ok) await cache.put(url, response.clone());
-    return true;
-  } catch (error) {
-    console.warn('[Godofredo] No se pudo precargar:', url);
-    return false;
-  }
-}
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-
-    // Primero descarga el HTML completo mientras hay Internet.
-    const htmlResponse = await fetch(new Request(APP, { cache: 'reload' }));
-    if (htmlResponse && htmlResponse.ok) {
-      await cache.put(APP, htmlResponse.clone());
-      const html = await htmlResponse.clone().text();
-      const assets = extractAssets(html);
-
-      // Descarga TODOS los recursos locales mencionados en el HTML,
-      // aunque todavía no se hayan mostrado en pantalla.
-      await Promise.all(assets.map(url => cacheOne(cache, url)));
-    } else {
-      await Promise.all(CORE.map(url => cacheOne(cache, url)));
-    }
-
+    // Cache every known local game resource, but do not let one missing file
+    // prevent the whole PWA from installing.
+    await Promise.all(APP_SHELL.map(async url => {
+      try { await cache.add(url); } catch (e) { console.warn('No se pudo cachear:', url); }
+    }));
     await self.skipWaiting();
   })());
 });
@@ -81,85 +89,27 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
+    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
     await self.clients.claim();
   })());
 });
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-
-  const request = event.request;
-
+  const req = event.request;
   event.respondWith((async () => {
-    const cache = await caches.open(CACHE);
-
-    // Chrome puede solicitar los WAV mediante Range. Si el archivo completo
-    // está en caché, devolvemos correctamente el fragmento solicitado.
-    if (request.headers.has('range')) {
-      const cachedAudio = await cache.match(request.url);
-
-      if (cachedAudio) {
-        const rangeHeader = request.headers.get('range');
-        const match = rangeHeader && rangeHeader.match(/bytes=(\d+)-(\d*)/);
-
-        if (match) {
-          try {
-            const buffer = await cachedAudio.arrayBuffer();
-            const start = Number(match[1]);
-            let end = match[2] ? Number(match[2]) : buffer.byteLength - 1;
-
-            if (start >= 0 && start < buffer.byteLength) {
-              end = Math.min(end, buffer.byteLength - 1);
-
-              if (end >= start) {
-                const chunk = buffer.slice(start, end + 1);
-
-                return new Response(chunk, {
-                  status: 206,
-                  statusText: 'Partial Content',
-                  headers: {
-                    'Content-Type': cachedAudio.headers.get('Content-Type') || 'audio/wav',
-                    'Content-Range': `bytes ${start}-${end}/${buffer.byteLength}`,
-                    'Accept-Ranges': 'bytes',
-                    'Content-Length': String(chunk.byteLength)
-                  }
-                });
-              }
-            }
-          } catch (error) {
-            console.warn('[Godofredo] Error sirviendo audio Range:', error);
-          }
-        }
-      }
-    }
-
-    // Si ya está en caché, usarlo directamente.
-    const cached = await cache.match(request);
+    const cached = await caches.match(req);
     if (cached) return cached;
-
-    // Si no está en caché, intentar Internet y guardar la respuesta.
     try {
-      const response = await fetch(request);
-
-      if (
-        response &&
-        response.ok &&
-        new URL(request.url).origin === self.location.origin
-      ) {
-        await cache.put(request, response.clone());
+      const response = await fetch(req);
+      if (response && response.ok && new URL(req.url).origin === self.location.origin) {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(req, copy)).catch(() => {});
       }
-
       return response;
-    } catch (error) {
-      if (request.mode === 'navigate') {
-        return (await cache.match(APP)) || (await cache.match('./'));
-      }
-
-      return new Response('', {
-        status: 503,
-        statusText: 'Offline'
-      });
+    } catch (e) {
+      if (req.mode === 'navigate') return caches.match('./Godofredo-v24-pwa.html');
+      return new Response('', { status: 503, statusText: 'Offline' });
     }
   })());
 });
