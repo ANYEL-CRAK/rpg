@@ -1,11 +1,5 @@
-/* Godofredo - Service Worker v26
-   Precarga index.html + CSS + JS + todos los recursos locales que estos archivos
-   referencian. Esto incluye marcos de clase cargados dinámicamente desde JS/CSS.
-*/
-
 const CACHE = 'index';
 const APP = './index.html';
-
 const CORE = [
   './',
   APP,
@@ -15,121 +9,71 @@ const CORE = [
   './icon-512.png'
 ];
 
-const ASSET_EXT = /\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a|css|js|html)(?:[?#].*)?$/i;
-
-function normalizeUrl(value, base = self.location.href) {
-  if (!value) return null;
-
-  let v = String(value).trim().replace(/^['"]|['"]$/g, '');
-  if (!v || v.startsWith('#')) return null;
-  if (/^(?:data|blob|javascript|mailto|tel):/i.test(v)) return null;
-  if (/^(?:https?:)?\/\//i.test(v)) return null;
-
-  // Ignora rutas absolutas del sistema y conserva solo recursos del mismo sitio.
-  try {
-    const u = new URL(v, base);
-    if (u.origin !== self.location.origin) return null;
-    u.hash = '';
-    return u.href;
-  } catch (_) {
-    return null;
-  }
+function isLocalAsset(value) {
+  if (!value) return false;
+  let v = value.trim().replace(/^['"]|['"]$/g, '');
+  if (!v || v.startsWith('data:') || v.startsWith('#') || v.startsWith('http://') || v.startsWith('https://') || v.startsWith('//')) return false;
+  if (v.startsWith('javascript:')) return false;
+  if (v.startsWith('/')) v = '.' + v;
+  return v.startsWith('./') || v.startsWith('../') || (!v.includes(':') && !v.startsWith('mailto:'));
 }
 
-function isRelevantFile(url) {
-  try {
-    return ASSET_EXT.test(new URL(url).pathname);
-  } catch (_) {
-    return false;
+function extractAssets(html) {
+  const found = new Set(CORE);
+  const patterns = [
+    /(?:src|href|poster|content)\s*=\s*["']([^"']+)["']/gi,
+    /url\(\s*["']?([^"')]+)["']?\s*\)/gi,
+    /(?:sounds|image)\/[A-Za-z0-9_().%+\-]+\.(?:webp|png|jpg|jpeg|gif|svg|wav|mp3|ogg|m4a)/gi
+  ];
+
+  for (const re of patterns) {
+    let match;
+    while ((match = re.exec(html)) !== null) {
+      const raw = match[1] || match[0];
+      if (!raw) continue;
+      const candidates = match[1] ? [raw] : [raw];
+      for (const candidate of candidates) {
+        let value = candidate.trim();
+        value = value.replace(/[?#].*$/, '');
+        if (!isLocalAsset(value)) continue;
+        if (!value.startsWith('./') && !value.startsWith('../')) value = './' + value;
+        found.add(value);
+      }
+    }
   }
-}
-
-function extractReferences(text, baseUrl) {
-  const found = new Set();
-  if (!text) return found;
-
-  const add = value => {
-    const url = normalizeUrl(value, baseUrl);
-    if (url && isRelevantFile(url)) found.add(url);
-  };
-
-  // src/href/poster/content y atributos similares.
-  const attrRe = /(?:src|href|poster|content|data-src|data-image|data-icon|data-frame|data-sound)\s*=\s*["']([^"']+)["']/gi;
-  let m;
-  while ((m = attrRe.exec(text))) add(m[1]);
-
-  // url(...), típico de CSS.
-  const cssUrlRe = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
-  while ((m = cssUrlRe.exec(text))) add(m[1]);
-
-  // Rutas image/... y sounds/... aunque estén dentro de strings JS.
-  const localPathRe = /(?:^|["'`\s(=,:])((?:\.\/|\.\.\/)?(?:image|images|sounds|audio)\/[^"'`\s)>,;]+\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a))(?:["'`\s),;]|$)/gi;
-  while ((m = localPathRe.exec(text))) add(m[1]);
-
-  // Cualquier string local que termine en un recurso conocido.
-  const quotedFileRe = /["'`]([^"'`\r\n]+\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a|css|js|html))["'`]/gi;
-  while ((m = quotedFileRe.exec(text))) add(m[1]);
-
-  return found;
+  return [...found];
 }
 
 async function cacheOne(cache, url) {
   try {
     const request = new Request(url, { cache: 'reload' });
     const response = await fetch(request);
-    if (!response || !response.ok) {
-      console.warn('[Godofredo] No se pudo precargar:', url, response && response.status);
-      return null;
-    }
-    await cache.put(url, response.clone());
-    return response;
+    if (response && response.ok) await cache.put(url, response.clone());
+    return true;
   } catch (error) {
-    console.warn('[Godofredo] Error precargando:', url, error);
-    return null;
-  }
-}
-
-async function precacheEverything() {
-  const cache = await caches.open(CACHE);
-  const queue = [...new Set(CORE.map(url => new URL(url, self.location.href).href))];
-  const visited = new Set();
-
-  while (queue.length) {
-    const url = queue.shift();
-    if (visited.has(url)) continue;
-    visited.add(url);
-
-    const response = await cacheOne(cache, url);
-    if (!response) continue;
-
-    // Solo inspeccionamos texto de HTML/CSS/JS para descubrir más recursos.
-    let type = '';
-    try { type = response.headers.get('content-type') || ''; } catch (_) {}
-    const path = new URL(url).pathname.toLowerCase();
-    const isTextResource =
-      type.includes('text/html') ||
-      type.includes('text/css') ||
-      type.includes('javascript') ||
-      /\.(?:html|css|js)$/i.test(path);
-
-    if (!isTextResource) continue;
-
-    try {
-      const text = await response.clone().text();
-      const refs = extractReferences(text, url);
-      for (const ref of refs) {
-        if (!visited.has(ref)) queue.push(ref);
-      }
-    } catch (error) {
-      console.warn('[Godofredo] No se pudo analizar:', url, error);
-    }
+    console.warn('[Godofredo] No se pudo precargar:', url);
+    return false;
   }
 }
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    // Si el HTML real se llama index.html, este es el archivo que se precarga.
-    await precacheEverything();
+    const cache = await caches.open(CACHE);
+
+    // Primero descarga el HTML completo mientras hay Internet.
+    const htmlResponse = await fetch(new Request(APP, { cache: 'reload' }));
+    if (htmlResponse && htmlResponse.ok) {
+      await cache.put(APP, htmlResponse.clone());
+      const html = await htmlResponse.clone().text();
+      const assets = extractAssets(html);
+
+      // Descarga TODOS los recursos locales mencionados en el HTML,
+      // aunque todavía no se hayan mostrado en pantalla.
+      await Promise.all(assets.map(url => cacheOne(cache, url)));
+    } else {
+      await Promise.all(CORE.map(url => cacheOne(cache, url)));
+    }
+
     await self.skipWaiting();
   })());
 });
@@ -137,9 +81,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(
-      keys.filter(key => key !== CACHE).map(key => caches.delete(key))
-    );
+    await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
     await self.clients.claim();
   })());
 });
@@ -152,13 +94,15 @@ self.addEventListener('fetch', event => {
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
 
-    // Primero: servir desde caché. No usamos Range manual para los WAV.
+    // Servir directamente los recursos ya precargados, incluidos los WAV.
+    // No manipulamos respuestas Range para evitar problemas de reproducción.
     const cached = await cache.match(request);
     if (cached) return cached;
 
-    // Si un recurso no estaba en la precarga, se guarda al usarlo mientras haya Internet.
+    // Si todavía no está en caché, obtenerlo de Internet y guardarlo.
     try {
       const response = await fetch(request);
+
       if (
         response &&
         response.ok &&
@@ -166,6 +110,7 @@ self.addEventListener('fetch', event => {
       ) {
         await cache.put(request, response.clone());
       }
+
       return response;
     } catch (error) {
       if (request.mode === 'navigate') {
