@@ -1,165 +1,70 @@
+/* Godofredo - Service Worker v26 */
 const CACHE = 'index';
 const APP = './index.html';
-const CORE = [
-  './',
-  APP,
-  './manifest.json',
-  './service-worker.js',
-  './icon-192.png',
-  './icon-512.png'
-];
+const CORE = ['./', APP, './manifest.json', './service-worker.js', './icon-192.png', './icon-512.png'];
+const ASSET_EXT = /\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a|css|js|html)(?:[?#].*)?$/i;
 
-function isLocalAsset(value) {
-  if (!value) return false;
-  let v = value.trim().replace(/^['"]|['"]$/g, '');
-  if (!v || v.startsWith('data:') || v.startsWith('#') || v.startsWith('http://') || v.startsWith('https://') || v.startsWith('//')) return false;
-  if (v.startsWith('javascript:')) return false;
-  if (v.startsWith('/')) v = '.' + v;
-  return v.startsWith('./') || v.startsWith('../') || (!v.includes(':') && !v.startsWith('mailto:'));
+function normalizeUrl(value, base = self.location.href) {
+  if (!value) return null;
+  let v = String(value).trim().replace(/^['"]|['"]$/g, '');
+  if (!v || v.startsWith('#')) return null;
+  if (/^(?:data|blob|javascript|mailto|tel):/i.test(v)) return null;
+  if (/^(?:https?:)?\/\//i.test(v)) return null;
+  try { const u = new URL(v, base); if (u.origin !== self.location.origin) return null; u.hash = ''; return u.href; } catch (_) { return null; }
 }
-
-function extractAssets(html) {
-  const found = new Set(CORE);
-  const patterns = [
-    /(?:src|href|poster|content)\s*=\s*["']([^"']+)["']/gi,
-    /url\(\s*["']?([^"')]+)["']?\s*\)/gi,
-    /(?:sounds|image)\/[A-Za-z0-9_().%+\-]+\.(?:webp|png|jpg|jpeg|gif|svg|wav|mp3|ogg|m4a)/gi
-  ];
-
-  for (const re of patterns) {
-    let match;
-    while ((match = re.exec(html)) !== null) {
-      const raw = match[1] || match[0];
-      if (!raw) continue;
-      const candidates = match[1] ? [raw] : [raw];
-      for (const candidate of candidates) {
-        let value = candidate.trim();
-        value = value.replace(/[?#].*$/, '');
-        if (!isLocalAsset(value)) continue;
-        if (!value.startsWith('./') && !value.startsWith('../')) value = './' + value;
-        found.add(value);
-      }
-    }
-  }
-  return [...found];
+function isRelevantFile(url) { try { return ASSET_EXT.test(new URL(url).pathname); } catch (_) { return false; } }
+function extractReferences(text, baseUrl) {
+  const found = new Set(); if (!text) return found;
+  const add = value => { const url = normalizeUrl(value, baseUrl); if (url && isRelevantFile(url)) found.add(url); };
+  const attrRe = /(?:src|href|poster|content|data-src|data-image|data-icon|data-frame|data-sound)\s*=\s*["']([^"']+)["']/gi;
+  let m; while ((m = attrRe.exec(text))) add(m[1]);
+  const cssUrlRe = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+  while ((m = cssUrlRe.exec(text))) add(m[1]);
+  const localPathRe = /(?:^|["'`\s(=,:])((?:\.\/|\.\.\/)?(?:image|images|sounds|audio)\/[^"'`\s)>,;]+\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a))(?:["'`\s),;]|$)/gi;
+  while ((m = localPathRe.exec(text))) add(m[1]);
+  const quotedFileRe = /["'`]([^"'`\r\n]+\.(?:webp|png|jpe?g|gif|svg|wav|mp3|ogg|m4a|css|js|html))["'`]/gi;
+  while ((m = quotedFileRe.exec(text))) add(m[1]);
+  return found;
 }
-
 async function cacheOne(cache, url) {
-  try {
-    const request = new Request(url, { cache: 'reload' });
-    const response = await fetch(request);
-    if (response && response.ok) await cache.put(url, response.clone());
-    return true;
-  } catch (error) {
-    console.warn('[Godofredo] No se pudo precargar:', url);
-    return false;
+  try { const response = await fetch(new Request(url, {cache:'reload'})); if (!response || !response.ok) return null; await cache.put(url, response.clone()); return response; }
+  catch (error) { console.warn('[Godofredo] Error precargando:', url, error); return null; }
+}
+async function precacheEverything() {
+  const cache = await caches.open(CACHE);
+  const queue = [...new Set(CORE.map(url => new URL(url, self.location.href).href))];
+  const visited = new Set();
+  while (queue.length) {
+    const url = queue.shift(); if (visited.has(url)) continue; visited.add(url);
+    const response = await cacheOne(cache, url); if (!response) continue;
+    let type = ''; try { type = response.headers.get('content-type') || ''; } catch (_) {}
+    const path = new URL(url).pathname.toLowerCase();
+    const isText = type.includes('text/html') || type.includes('text/css') || type.includes('javascript') || /\.(?:html|css|js)$/i.test(path);
+    if (!isText) continue;
+    try { const refs = extractReferences(await response.clone().text(), url); for (const ref of refs) if (!visited.has(ref)) queue.push(ref); }
+    catch (error) { console.warn('[Godofredo] No se pudo analizar:', url, error); }
   }
 }
-
-self.addEventListener('install', event => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE);
-
-    // Primero descarga el HTML completo mientras hay Internet.
-    const htmlResponse = await fetch(new Request(APP, { cache: 'reload' }));
-    if (htmlResponse && htmlResponse.ok) {
-      await cache.put(APP, htmlResponse.clone());
-      const html = await htmlResponse.clone().text();
-      const assets = extractAssets(html);
-
-      // Descarga TODOS los recursos locales mencionados en el HTML,
-      // aunque todavía no se hayan mostrado en pantalla.
-      await Promise.all(assets.map(url => cacheOne(cache, url)));
-    } else {
-      await Promise.all(CORE.map(url => cacheOne(cache, url)));
-    }
-
-    await self.skipWaiting();
-  })());
-});
-
-self.addEventListener('activate', event => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
-    await self.clients.claim();
-  })());
-});
-
+self.addEventListener('install', event => event.waitUntil((async()=>{ await precacheEverything(); await self.skipWaiting(); })()));
+self.addEventListener('activate', event => event.waitUntil((async()=>{ const keys=await caches.keys(); await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))); await self.clients.claim(); })()));
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-
   const request = event.request;
-
-  event.respondWith((async () => {
+  event.respondWith((async()=>{
     const cache = await caches.open(CACHE);
-
-    // Chrome puede solicitar los WAV mediante Range. Si el archivo completo
-    // está en caché, devolvemos correctamente el fragmento solicitado.
     if (request.headers.has('range')) {
       const cachedAudio = await cache.match(request.url);
-
       if (cachedAudio) {
         const rangeHeader = request.headers.get('range');
         const match = rangeHeader && rangeHeader.match(/bytes=(\d+)-(\d*)/);
-
-        if (match) {
-          try {
-            const buffer = await cachedAudio.arrayBuffer();
-            const start = Number(match[1]);
-            let end = match[2] ? Number(match[2]) : buffer.byteLength - 1;
-
-            if (start >= 0 && start < buffer.byteLength) {
-              end = Math.min(end, buffer.byteLength - 1);
-
-              if (end >= start) {
-                const chunk = buffer.slice(start, end + 1);
-
-                return new Response(chunk, {
-                  status: 206,
-                  statusText: 'Partial Content',
-                  headers: {
-                    'Content-Type': cachedAudio.headers.get('Content-Type') || 'audio/wav',
-                    'Content-Range': `bytes ${start}-${end}/${buffer.byteLength}`,
-                    'Accept-Ranges': 'bytes',
-                    'Content-Length': String(chunk.byteLength)
-                  }
-                });
-              }
-            }
-          } catch (error) {
-            console.warn('[Godofredo] Error sirviendo audio Range:', error);
-          }
-        }
+        if (match) try {
+          const buffer = await cachedAudio.arrayBuffer(); const start=Number(match[1]); let end=match[2]?Number(match[2]):buffer.byteLength-1;
+          if(start>=0 && start<buffer.byteLength){ end=Math.min(end,buffer.byteLength-1); if(end>=start){ const chunk=buffer.slice(start,end+1); return new Response(chunk,{status:206,statusText:'Partial Content',headers:{'Content-Type':cachedAudio.headers.get('Content-Type')||'audio/wav','Content-Range':`bytes ${start}-${end}/${buffer.byteLength}`,'Accept-Ranges':'bytes','Content-Length':String(chunk.byteLength)}}); } }
+        } catch(error){ console.warn('[Godofredo] Error sirviendo audio Range:', error); }
       }
     }
-
-    // Si ya está en caché, usarlo directamente.
-    const cached = await cache.match(request);
-    if (cached) return cached;
-
-    // Si no está en caché, intentar Internet y guardar la respuesta.
-    try {
-      const response = await fetch(request);
-
-      if (
-        response &&
-        response.ok &&
-        new URL(request.url).origin === self.location.origin
-      ) {
-        await cache.put(request, response.clone());
-      }
-
-      return response;
-    } catch (error) {
-      if (request.mode === 'navigate') {
-        return (await cache.match(APP)) || (await cache.match('./'));
-      }
-
-      return new Response('', {
-        status: 503,
-        statusText: 'Offline'
-      });
-    }
+    const cached = await cache.match(request); if (cached) return cached;
+    try { const response=await fetch(request); if(response&&response.ok&&new URL(request.url).origin===self.location.origin) await cache.put(request,response.clone()); return response; }
+    catch(error){ if(request.mode==='navigate') return (await cache.match(APP))||(await cache.match('./')); return new Response('',{status:503,statusText:'Offline'}); }
   })());
 });
